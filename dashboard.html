@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Gatekeeper bouncer script handles file lockdown instantly -->
+    <script>
+        if (sessionStorage.getItem('lecturerAuthenticated') !== 'true') {
+            alert('Unauthorized access! Redirecting to login portal.');
+            window.location.href = 'login.html';
+        }
+    </script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lecturer Control Management Portal</title>
+    <style>
+        :root {
+            --primary: #1a73e8;
+            --primary-hover: #1557b0;
+            --bg-page: #f8f9fa;
+            --card-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+            --success-bg: #e6f4ea;
+            --success-color: #137333;
+            --border-color: #dadce0;
+        }
+
+        body { 
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; 
+            background-color: var(--bg-page); 
+            color: #3c4043; 
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+        }
+
+        .menu-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 12px;
+        }
+
+        .panel {
+            background: white; 
+            padding: 32px; 
+            border-radius: 12px; 
+            box-shadow: var(--card-shadow); 
+            border: 1px solid var(--border-color);
+        }
+
+        h2 { margin: 0 0 8px 0; color: #1c3aa9; font-size: 24px; font-weight: 600; }
+        .subtitle { color: #5f6368; font-size: 14px; margin-bottom: 24px; }
+
+        .form-group { margin-bottom: 18px; }
+        label { display: block; font-size: 13px; font-weight: 600; color: #202124; margin-bottom: 6px; }
+        input { width: 100%; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; box-sizing: border-box; background: #f1f3f4; }
+        input:focus { background: white; border-color: var(--primary); outline: none; }
+
+        button { background-color: var(--primary); color: white; border: none; padding: 14px; font-size: 15px; border-radius: 6px; cursor: pointer; width: 100%; font-weight: 600; transition: all 0.2s ease; }
+        button:hover { background-color: var(--primary-hover); }
+
+        .status { margin-top: 15px; font-weight: 500; font-size: 13px; color: var(--primary); }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 14px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid var(--border-color); }
+        th { background-color: #f8f9fa; color: #5f6368; font-weight: 600; }
+
+        .badge-status { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+        .badge-verified { background: var(--success-bg); color: var(--success-color); }
+        .badge-denied { background: #fce8e6; color: #c5221f; }
+        
+        .panel-header-block { display: flex; justify-content: space-between; align-items: flex-start; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <!-- Lecturer Top Menu Bar Navigation -->
+    <div class="menu-bar">
+        <a href="index.html" style="text-decoration: none; color: #1a73e8; font-weight: 600; font-size: 14px;">← Back to Student Check-In</a>
+    </div>
+
+    <!-- LECTURER PANEL -->
+    <div id="lecturer-panel" class="panel">
+        <div class="panel-header-block">
+            <div>
+                <h2>Lecturer Control Management</h2>
+                <div class="subtitle">Generate tracking sessions and audit automated system history logs.</div>
+            </div>
+            
+            <button onclick="sessionStorage.removeItem('lecturerAuthenticated'); window.location.href='login.html';" style="padding: 10px 18px; background: #dc2626; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; width: auto;">
+                Logout
+            </button>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
+            <div>
+                <h3>Initialize Live Session</h3>
+                <div class="form-group">
+                    <label>Target Course Code</label>
+                    <input type="text" id="courseCode" value="CSC413">
+                </div>
+                <div class="form-group">
+                    <label>Session Expiration (Minutes)</label>
+                    <input type="number" id="duration" value="60">
+                </div>
+                <button onclick="createSession()">Deploy Active Geofence</button>
+                <div id="lecturerStatus" class="status"></div>
+            </div>
+            
+            <div>
+                <h3>Active Baseline Parameters</h3>
+                <p style="font-size: 13px; color: #5f6368; line-height: 1.4;">
+                    Deploying a session automatically sets the target verification perimeter utilizing your device's active coordinate mesh framework.
+                </p>
+            </div>
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 30px 0;">
+
+        <h3>Attendance History Logs</h3>
+        <table id="historyTable">
+            <thead>
+                <tr>
+                    <th>Student ID</th>
+                    <th>Name</th>
+                    <th>Timestamp</th>
+                    <th>Proximity Assessment</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="4" style="text-align:center; color:#80868b;">No logs recorded for this course session.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // Automatically trigger history fetch when dashboard renders
+    window.onload = function() {
+        fetchLogs();
+    };
+
+    // Lecturer Panel: Create New Active Tracking Geofence Session
+    // Helper function to sample actual room noise levels using the Web Audio API
+    async function sampleAmbientNoise(durationMs = 1500) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const analyser = audioContext.createAnalyser();
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(analyser);
+
+            analyser.fftSize = 256;
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            let totalDb = 0;
+            let samplesCount = 0;
+            const startTime = Date.now();
+
+            // Sample values in a brief loop
+            while (Date.now() - startTime < durationMs) {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < bufferLength; i++) {
+                    sum += dataArray[i];
+                }
+                let average = sum / bufferLength;
+                
+                // Convert raw amplitude (0-255) to a simulated decibel scale (roughly 30dB to 90dB)
+                let db = 30 + (average / 255) * 60; 
+                totalDb += db;
+                samplesCount++;
+                
+                // Pause slightly before next sample
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+
+            // Clean up microphone stream
+            stream.getTracks().forEach(track => track.stop());
+            audioContext.close();
+
+            // Return the average recorded baseline
+            return samplesCount > 0 ? Math.round(totalDb / samplesCount) : 45.0;
+        } catch (err) {
+            console.warn("Microphone access denied or unavailable. Falling back to default baseline.", err);
+            return 55.0; // Dynamic safe fallback if mic permission is blocked
+        }
+    }
+
+    // Lecturer Panel: Create New Active Tracking Geofence Session
+    async function createSession() {
+        const status = document.getElementById('lecturerStatus');
+        const courseCode = document.getElementById('courseCode').value;
+        const duration = document.getElementById('duration').value;
+
+        status.innerText = "Analyzing classroom acoustics and retrieving coordinates...";
+        status.style.color = "inherit";
+
+        // 1. First sample the physical room noise dynamically
+        const calculatedBaseNoise = await sampleAmbientNoise(1500);
+        
+        // 2. Fetch the current coordinates
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+            const payload = {
+                courseCode: courseCode,
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                baseNoise: parseFloat(calculatedBaseNoise.toFixed(1)), // Live room volume level!
+                durationMinutes: parseInt(duration)
+            };
+
+            try {
+                const response = await fetch('http://localhost:5000/api/create-session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const resData = await response.json();
+                status.innerText = `✓ Active Geofence Deployed for ${courseCode}! (Room Baseline: ${payload.baseNoise} dB)`;
+                fetchLogs();
+            } catch(e) {
+                status.style.color = "red";
+                status.innerText = "Network Error: Failed to configure tracking boundaries.";
+            }
+        }, (geoErr) => {
+            status.style.color = "red";
+            status.innerText = `Location Error: ${geoErr.message}. Enable GPS to deploy geofence.`;
+        }, { enableHighAccuracy: true, timeout: 10000 });
+    }
+
+    // Lecturer Panel: Fetch Student Log Row Entries
+    async function fetchLogs() {
+        const tbody = document.querySelector('#historyTable tbody');
+        try {
+            const response = await fetch('http://localhost:5000/api/attendance-history');
+            const logs = await response.json();
+            
+            if(logs.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#80868b;">No logs recorded for this course session.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = logs.map(log => `
+                <tr>
+                    <td><strong>${log.studentId}</strong></td>
+                    <td>${log.studentName}</td>
+                    <td>${new Date(log.timestamp).toLocaleTimeString()}</td>
+                    <td>
+                        <span class="badge-status ${log.isVerified ? 'badge-verified' : 'badge-denied'}">
+                            ${log.isVerified ? 'Verified Present' : 'Denied Entry'} (${(log.confidenceScore * 100).toFixed(0)}%)
+                        </span>
+                    </td>
+                </tr>
+            `).join('');
+        } catch (e) {
+            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:#c5221f;">Error establishing interface link to history table.</td></tr>`;
+        }
+    }
+</script>
+</body>
+</html>
