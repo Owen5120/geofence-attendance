@@ -13,10 +13,10 @@
             --border-color: #dadce0;
         }
 
-        body { 
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; 
-            background-color: var(--bg-page); 
-            color: #3c4043; 
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-page);
+            color: #3c4043;
             margin: 0;
             padding: 40px 20px;
             display: flex;
@@ -31,7 +31,6 @@
             width: 100%;
         }
 
-        /* Top Menu Navigation Bar */
         .menu-bar {
             display: flex;
             justify-content: space-between;
@@ -56,11 +55,13 @@
         .admin-link-btn:hover { background-color: #d2e3fc; }
 
         .panel {
-            background: white; 
-            padding: 32px; 
-            border-radius: 12px; 
-            box-shadow: var(--card-shadow); 
+            background: white;
+            padding: 32px;
+            border-radius: 16px;
+            box-shadow: var(--card-shadow);
             border: 1px solid var(--border-color);
+            position: relative;
+            overflow: hidden;
         }
 
         h2 { margin: 0 0 8px 0; color: #1c3aa9; font-size: 24px; font-weight: 600; }
@@ -75,7 +76,68 @@
         button:hover { background-color: var(--primary-hover); }
         button:disabled { background-color: #bcc1c6; cursor: not-allowed; }
 
-        .status { margin-top: 15px; font-weight: 500; font-size: 13px; color: var(--primary); }
+        .status { margin-top: 15px; font-weight: 500; font-size: 13px; color: var(--primary); text-align: center; }
+
+        /* Audio Wave Visualizer Animation */
+        .visualizer-container {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            height: 40px;
+            margin: 20px 0;
+        }
+
+        .wave-bar {
+            width: 6px;
+            height: 100%;
+            background: var(--primary);
+            border-radius: 4px;
+            animation: wave 1.2s ease-in-out infinite;
+        }
+
+        .wave-bar:nth-child(2) { animation-delay: 0.1s; }
+        .wave-bar:nth-child(3) { animation-delay: 0.2s; }
+        .wave-bar:nth-child(4) { animation-delay: 0.3s; }
+        .wave-bar:nth-child(5) { animation-delay: 0.4s; }
+
+        @keyframes wave {
+            0%, 100% { transform: scaleY(0.2); }
+            50% { transform: scaleY(1.0); }
+        }
+
+        /* Radar Location Ripple Animation */
+        .radar-container {
+            display: none;
+            justify-content: center;
+            align-items: center;
+            margin: 20px 0;
+        }
+
+        .radar-ping {
+            width: 20px;
+            height: 20px;
+            background-color: var(--primary);
+            border-radius: 50%;
+            position: relative;
+        }
+
+        .radar-ping::after {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            background-color: var(--primary);
+            border-radius: 50%;
+            animation: pulse 1.5s ease-out infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(3.5); opacity: 0; }
+        }
     </style>
 </head>
 <body>
@@ -97,7 +159,28 @@
             <input type="text" id="matricNumberField" placeholder="e.g., DEL/2022/010">
         </div>
 
+        <div class="form-group">
+            <label>Course Code</label>
+            <input type="text" id="courseCodeField" placeholder="e.g., CSC413">
+        </div>
+
         <button id="verifyBtn">Mark My Attendance</button>
+
+        <!-- Audio Waveform Visualizer -->
+        <div id="audioVisualizer" class="visualizer-container">
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+        </div>
+
+        <!-- Radar Location Animation -->
+        <div id="locationRadar" class="radar-container">
+            <div class="radar-ping"></div>
+        </div>
+
+        <!-- Single Clean Status Message Container -->
         <div id="statusMsg" class="status"></div>
     </div>
 </div>
@@ -106,12 +189,15 @@
     document.getElementById('verifyBtn').addEventListener('click', async () => {
         const btn = document.getElementById('verifyBtn');
         const status = document.getElementById('statusMsg');
-        const courseCodeInput = "CSC413"; 
+        const audioVis = document.getElementById('audioVisualizer');
+        const locRadar = document.getElementById('locationRadar');
         
         const matricInput = document.getElementById('matricNumberField').value.trim();
-        if (!matricInput) {
+        const courseCodeInput = document.getElementById('courseCodeField').value.trim(); 
+
+        if (!matricInput || !courseCodeInput) {
             status.style.color = "red";
-            status.innerText = "Please enter your ID Number before checking in.";
+            status.innerText = "Please enter both your ID Number and Course Code.";
             return;
         }
 
@@ -119,10 +205,12 @@
         status.style.color = "var(--primary)";
         let liveNoiseLevel = 0;
 
+        // Step 1: Acoustic Sampling & Audio Visualizer
         try {
-            status.innerText = "Listening to classroom ambient noise frequencies...";
+            status.innerText = "Listening to classroom ambient noise (3 seconds)...";
+            audioVis.style.display = "flex"; // Activate visual wave animation
+
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
             const analyser = audioContext.createAnalyser();
             const microphone = audioContext.createMediaStreamSource(stream);
@@ -135,40 +223,45 @@
             analyser.connect(javascriptNode);
             javascriptNode.connect(audioContext.destination);
 
-           let noiseSamples = [];
+            let noiseSamples = [];
             javascriptNode.onaudioprocess = () => {
                 const array = new Uint8Array(analyser.frequencyBinCount);
                 analyser.getByteFrequencyData(array);
                 
-                // Calculate average raw signal strength (from 0 to 255)
                 let total = 0;
                 for (let i = 0; i < array.length; i++) {
                     total += array[i];
                 }
                 const rawAverage = total / array.length;
-                
-                // Map the 0-255 raw scale to a standard 30-90 decibel room range
-                // A silent laptop mic registers around 30dB, while talking scales up normally.
                 let dbLevel = 30 + (rawAverage / 255) * 60; 
                 noiseSamples.push(dbLevel);
             };
 
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            // 3-second acoustic sampling window
+            await new Promise(resolve => setTimeout(resolve, 3000));
 
+            // Stop tracks & clean up audio contexts (Privacy preserving)
             stream.getTracks().forEach(track => track.stop());
+            javascriptNode.disconnect();
+            analyser.disconnect();
+            microphone.disconnect();
             audioContext.close();
-            
+
             if (noiseSamples.length > 0) {
                 liveNoiseLevel = noiseSamples.reduce((a, b) => a + b, 0) / noiseSamples.length;
             }
-            console.log("Captured Ambiance Level:", liveNoiseLevel);
+            noiseSamples = null; // Explicit memory cleanup
 
         } catch (audioErr) {
             console.warn("Microphone access denied or unavailable. Defaulting sensor profile.");
             liveNoiseLevel = 0; 
+        } finally {
+            audioVis.style.display = "none"; // Hide wave animation
         }
 
+        // Step 2: Location Radar & Geolocation Transmission
         status.innerText = "Synchronizing coordinate mesh with core system...";
+        locRadar.style.display = "flex"; // Activate location radar animation
 
         navigator.geolocation.getCurrentPosition(async (pos) => {
             const payload = {
@@ -181,7 +274,7 @@
             };
 
             try {
-                const response = await fetch('http://localhost:5000/api/verify-attendance', {
+                const response = await fetch('/api/verify-attendance', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -194,9 +287,12 @@
             } catch (e) {
                 status.style.color = "red";
                 status.innerText = "Network transmission timeout / Connection failed.";
+            } finally {
+                locRadar.style.display = "none"; // Hide radar animation
+                btn.disabled = false;
             }
-            btn.disabled = false;
         }, (geoErr) => {
+            locRadar.style.display = "none";
             status.style.color = "red";
             status.innerText = `Location Error: ${geoErr.message}. Ensure location permissions are granted.`;
             btn.disabled = false;

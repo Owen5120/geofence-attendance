@@ -45,7 +45,7 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
     return R * c; 
 }
 
-// Main Endpoint: Validate Student Presence using the Machine Learning Model
+// Main Endpoint: Validate Student Presence using ML DNN Classifier
 app.post('/api/verify-attendance', (req, res) => {
     const { studentId, courseCode, latitude, longitude, noiseLevel, temperature } = req.body;
     
@@ -65,7 +65,7 @@ app.post('/api/verify-attendance', (req, res) => {
         const studentName = studentRecord.name; 
         const courseRegex = new RegExp(`^${targetCourse}$`, 'i');
 
-        // 2. Look up the active session
+        // 2. Look up active session
         dbManager.db.sessions.findOne({ courseCode: courseRegex, isActive: true }, (err, activeSession) => {
             if (err || !activeSession) {
                 return res.json({ 
@@ -80,61 +80,85 @@ app.post('/api/verify-attendance', (req, res) => {
                 return res.json({ success: true, verified: false, message: "Attendance Denied. The session window has closed." });
             }
 
+            // --- REQUIREMENT 3.1: FAST-PATH HARD GEOFENCE GATE ---
+            const distanceMeters = getDistanceInMeters(latitude, longitude, activeSession.latitude, activeSession.longitude);
+            console.log(`\n[Fast-Path Geofence Check] Distance: ${distanceMeters.toFixed(2)} meters`);
+
+            if (distanceMeters > 25.0) {
+                console.log(`[Gate Rejection] Distance (${distanceMeters.toFixed(2)}m) exceeds strict 25m spatial boundary. Short-circuiting ML pipeline.`);
+                
+                dbManager.logAttendance(targetStudentId, studentName, activeSession.courseCode, { latitude, longitude, noiseLevel, temperature }, false, 0.0, () => {
+                    return res.json({
+                        success: true,
+                        verified: false,
+                        score: 0.0,
+                        message: `Attendance Denied. You are outside the 25-meter spatial geofence (${distanceMeters.toFixed(1)}m away).`
+                    });
+                });
+                return; // Stop execution here to save CPU cycles
+            }
+
             console.log(`\n[Incoming Request] Student Match Found: ${studentName} (${targetStudentId})`);
-            
-            // CORRECTED VARIABLES FOR THE LOGS
-            console.log(`\n--- LIVE TELEMETRY COMPARE ---`);
+            console.log(`--- LIVE TELEMETRY COMPARE ---`);
             console.log(`Student:   Lat: ${latitude}, Lng: ${longitude}, Noise: ${noiseLevel}dB, Temp: ${temperature}°C`);
             console.log(`Lecturer:  Lat: ${activeSession.latitude}, Lng: ${activeSession.longitude}, Noise: ${activeSession.baseNoise}dB, Temp: ${activeSession.baseTemp || 26.2}°C`);
             console.log(`------------------------------\n`);
-            
-            console.log(`Passing live telemetry data vectors directly into trained model file...`);
 
-            // 3. EXECUTE MACHINE LEARNING INFERENCE INTERFACE
-            // Forwards 8 arguments dynamically using your pythonCmd environment flag
-            execFile(pythonCmd, [
-                'predict.py', 
-                latitude, 
-                longitude, 
-                noiseLevel, 
-                temperature,
-                activeSession.latitude, 
-                activeSession.longitude, 
-                activeSession.baseNoise, 
-                activeSession.baseTemp || 26.2
-            ], (pyErr, stdout, stderr) => {
-                                    
+            // Construct JSON payload for predict.py
+            const mlPayload = JSON.stringify({
+                studentLat: latitude,
+                studentLng: longitude,
+                studentNoise: noiseLevel,
+                studentTemp: temperature || 26.2,
+                baseLat: activeSession.latitude,
+                baseLng: activeSession.longitude,
+                baseNoise: activeSession.baseNoise,
+                baseTemp: activeSession.baseTemp || 26.2
+            });
+
+            // --- REQUIREMENT 3.2: EXECUTE DNN INFERENCE ENGINE ---
+            execFile(pythonCmd, ['predict.py', mlPayload], (pyErr, stdout, stderr) => {
                 let verified = false;
-                let score = 0.0;
-                
+                let confidenceScore = 0.0;
+                let groundTruthState = activeSession.currentState !== undefined ? activeSession.currentState : 2; // Default to 'Full' state (2)
+
                 if (!pyErr && stdout) {
                     try {
                         const mlOutput = JSON.parse(stdout.trim());
-                        if (mlOutput.success) {
-                            // Prediction values: 1 = Authentic (Verified), 0 = Fraudulent/Spoofed
-                            verified = mlOutput.prediction === 1;
-                            score = mlOutput.score;
+                        
+                        if (mlOutput.predicted_state !== undefined) {
+                            const predictedState = mlOutput.predicted_state;
+                            confidenceScore = mlOutput.confidence;
+
+                            // REQUIREMENT 3.3: Two-Step ML Verification
+                            // 1. Predicted state matches session ground truth state
+                            // 2. Softmax Confidence score >= 85% (0.85)
+                            const stateMatch = (predictedState === groundTruthState);
+                            const confidencePass = (confidenceScore >= 0.85);
+
+                            verified = stateMatch && confidencePass;
+
+                            console.log(`[ML Verification Result] State Match: ${stateMatch} (Predicted: ${predictedState}, Ground: ${groundTruthState}) | Confidence: ${(confidenceScore * 100).toFixed(2)}% (Pass: ${confidencePass})`);
                         }
                     } catch (parseErr) {
-                        console.error("Failed to parse ML output JSON:", parseErr);
+                        console.error("Failed to parse ML output JSON:", parseErr, "Stdout:", stdout);
                     }
                 } else {
                     console.error("Python worker pipeline execution failure:", stderr || pyErr);
-                    verified = false;
                 }
 
                 const message = verified 
-                    ? `Attendance Successfully Verified via ML Model! (Confidence: ${(score * 100).toFixed(1)}%)`
-                    : "Attendance Denied. Machine Learning classification flags this telemetry signature as a spoof attempt.";
+                    ? `Attendance Successfully Verified via DNN Model! (Confidence: ${(confidenceScore * 100).toFixed(1)}%)`
+                    : "Attendance Denied. Machine learning classification flags this telemetry signature as invalid/out of state.";
 
-                // 4. Persist log row history alongside ML predictive metrics
-                dbManager.logAttendance(targetStudentId, studentName, activeSession.courseCode, { latitude, longitude, noiseLevel, temperature }, verified, score, (logErr) => {
+                // Persist historical log with ML confidence score
+                dbManager.logAttendance(targetStudentId, studentName, activeSession.courseCode, { latitude, longitude, noiseLevel, temperature }, verified, confidenceScore, (logErr) => {
                     if (logErr) console.error("Database Write Failed:", logErr);
                     
                     return res.json({
                         success: true,
                         verified: verified,
-                        score: score,
+                        score: confidenceScore,
                         message: message
                     });
                 });
@@ -145,14 +169,18 @@ app.post('/api/verify-attendance', (req, res) => {
 
 // Endpoint: Lecturer Action to create a dynamic session anywhere
 app.post('/api/create-session', (req, res) => {
-    const { courseCode, latitude, longitude, baseNoise, durationMinutes } = req.body;
+    const { courseCode, latitude, longitude, baseNoise, durationMinutes, currentState } = req.body;
     
     dbManager.createActiveSession(courseCode, latitude, longitude, baseNoise, durationMinutes, (err, newSession) => {
         if (err) {
             console.error("Session creation failed:", err);
             return res.status(500).json({ success: false });
         }
-        console.log(`\n[Database Configuration] New tracking perimeter initialized for ${courseCode} at (${latitude}, ${longitude}) with Ambient Baseline: ${baseNoise} dB.`);
+        
+        // Store ground-truth classroom state (0: Empty, 1: Partially Full, 2: Full). Default = 2
+        newSession.currentState = currentState !== undefined ? parseInt(currentState) : 2;
+        
+        console.log(`\n[Database Configuration] Tracking perimeter initialized for ${courseCode} at (${latitude}, ${longitude}) | Baseline Noise: ${baseNoise} dB | Ground State: ${newSession.currentState}`);
         return res.json({ success: true, session: newSession });
     });
 });

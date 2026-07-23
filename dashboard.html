@@ -221,7 +221,7 @@
             };
 
             try {
-                const response = await fetch('http://localhost:5000/api/create-session', {
+                const response = await fetch('https://geofence-attendance-rz9d.onrender.com/api/create-session', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
@@ -243,7 +243,7 @@
     async function fetchLogs() {
         const tbody = document.querySelector('#historyTable tbody');
         try {
-            const response = await fetch('http://localhost:5000/api/attendance-history');
+            const response = await fetch('https://geofence-attendance-rz9d.onrender.com/api/attendance-history');
             const logs = await response.json();
             
             if(logs.length === 0) {

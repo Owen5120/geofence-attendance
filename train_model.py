@@ -1,43 +1,40 @@
-# train_model.py
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import StandardScaler
 import pickle
 
-print("Loading artificial attendance logs...")
+print("Loading dataset with feature deltas...")
 df = pd.read_csv('artificial_attendance_data.csv')
 
-# Classroom Baseline Values used during generation
-CLASSROOM_LAT = 6.2441
-CLASSROOM_LNG = 5.6322
-BASE_NOISE = 65.0
-BASE_TEMP = 26.0
+# Features (x = [geo_delta, noise_delta, temp_delta])
+X = df[['geo_delta', 'noise_delta', 'temp_delta']]
+y = df['state_label']
 
-print("Engineering features (calculating variance deltas)...")
-# We explicitly train the model on pure DELTAS (differences)
-df['lat_diff'] = abs(df['latitude'] - CLASSROOM_LAT)
-df['lng_diff'] = abs(df['longitude'] - CLASSROOM_LNG)
-df['noise_diff'] = abs(df['noise_level'] - BASE_NOISE)
-df['temp_diff'] = abs(df['temperature'] - BASE_TEMP)
+# Scale features for neural network convergence
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
 
-# Features (X) and Target Labels (y)
-X = df[['lat_diff', 'lng_diff', 'noise_diff', 'temp_diff']]
-y = df['is_verified']
+print("Training 3-State Deep Neural Network (DNN) Classifier (64 -> 32 -> 16)...")
+dnn_model = MLPClassifier(
+    hidden_layer_sizes=(64, 32, 16),
+    activation='relu',
+    solver='adam',
+    max_iter=500,
+    random_state=42
+)
 
-print("Training real Random Forest Machine Learning Model...")
-# Use a slightly lower max_depth to prevent the model from memorizing the specific numbers
-model = RandomForestClassifier(n_estimators=100, max_depth=8, random_state=42)
-model.fit(X, y)
+dnn_model.fit(X_scaled, y)
 
-# Evaluate training baseline metrics
-accuracy = model.score(X, y) * 100
+# Evaluate training accuracy
+accuracy = dnn_model.score(X_scaled, y) * 100
 
 print(f"\n===== MODEL TRAINING COMPLETE =====")
-print(f"Machine Learning Verification Accuracy: {accuracy:.2f}%")
+print(f"DNN Classification Accuracy: {accuracy:.2f}%")
 print("====================================")
 
-# Save the genuine model weights file
-with open('attendance_model.pkl', 'wb') as file:
-    pickle.dump(model, file)
+# Save both the trained model AND the feature scaler
+with open('attendance_model.pkl', 'wb') as f:
+    pickle.dump({'model': dnn_model, 'scaler': scaler}, f)
 
-print("Model saved successfully as 'attendance_model.pkl'!")
+print("Model & Scaler saved successfully into 'attendance_model.pkl'!")
